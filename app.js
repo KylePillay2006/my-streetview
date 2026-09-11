@@ -3,15 +3,7 @@
    Flat "on the floor" navigation arrows.
    ============================================================ */
 
-/* ---------- Panorama graph ----------
-   Add each new panorama here.
-   - image:  path to the strip
-   - name:   shown in the arrows' tooltip
-   - yaw:    starting direction when this panorama loads (radians)
-   - links:  array of { target, atYaw }
-             atYaw is the direction (radians) in THIS panorama
-             where the arrow to the target should sit.
-   ----------------------------------- */
+/* ---------- Panorama graph ---------- */
 const panoramas = {
   pano1: {
     id: "pano1",
@@ -19,7 +11,7 @@ const panoramas = {
     image: "panoramas/pano1.jpg",
     yaw: 0,
     links: [
-      { target: "pano2", atYaw: Math.PI },   // arrow behind you
+      { target: "pano2", atYaw: Math.PI },
     ],
   },
   pano2: {
@@ -28,7 +20,7 @@ const panoramas = {
     image: "panoramas/pano2.jpg",
     yaw: Math.PI,
     links: [
-      { target: "pano1", atYaw: 0 },         // arrow in front
+      { target: "pano1", atYaw: 0 },
     ],
   },
 };
@@ -43,7 +35,11 @@ const BASE_FOV = 75;
 
 const CYLINDER_HEIGHT_RATIO = 0.85;
 
+// Drag sensitivity (radians per pixel). Higher = faster turning.
+// Desktop uses this; touch uses TOUCH_SENSITIVITY below.
 const DRAG_SENSITIVITY = 0.0025;
+const TOUCH_SENSITIVITY = 0.006;   // ~2.4x faster for finger drags
+
 const DAMPING = 0.88;
 
 const MIN_FOV = 30;
@@ -53,16 +49,10 @@ const MAX_PITCH = Math.PI * 0.28;
 
 const CAP_COLOR = 0x1a1a1a;
 
-// Radial distance from the camera where arrows sit.
 const ARROW_DISTANCE = 300;
-
-// How far below the camera the arrows sit (so they lie on the floor).
 const ARROW_FLOOR_Y = -180;
-
-// Arrow visual size (world units).
 const ARROW_SIZE = 90;
 
-// Fade duration when switching panoramas (seconds).
 const FADE_DURATION = 0.35;
 
 /* ---------- State ---------- */
@@ -74,6 +64,7 @@ let isDragging = false;
 let pointerStart = { x: 0, y: 0 };
 let yawAtDragStart = 0;
 let pitchAtDragStart = 0;
+let activeDragSensitivity = DRAG_SENSITIVITY;   // chosen per pointerdown
 
 let targetYaw = yaw;
 let targetPitch = pitch;
@@ -105,12 +96,19 @@ function init() {
   );
   camera.position.set(0, 0, 0);
 
-  renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    powerPreference: "high-performance",
+  });
+
+  // Cap pixel ratio lower on mobile so phones don't melt.
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const maxPR = isMobile ? 1.5 : 2;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPR));
   renderer.setSize(window.innerWidth, window.innerHeight);
   container.appendChild(renderer.domElement);
 
-  // --- Cylinder (the panorama surface) ---
+  // --- Cylinder ---
   const radius = 500;
   const height = radius * CYLINDER_HEIGHT_RATIO * 2;
   const geometry = new THREE.CylinderGeometry(
@@ -161,6 +159,10 @@ function switchTo(id, opts = {}) {
         texture.wrapS = THREE.RepeatWrapping;
         texture.wrapT = THREE.ClampToEdgeWrapping;
 
+        // Lower quality filtering on mobile → faster
+        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+        texture.minFilter = isMobile ? THREE.LinearFilter : THREE.LinearMipmapLinearFilter;
+
         if (cylinder.material.map) cylinder.material.map.dispose();
 
         cylinder.material.map = texture;
@@ -196,7 +198,6 @@ function switchTo(id, opts = {}) {
 /* ---------- Arrows ---------- */
 
 function buildArrows(pano) {
-  // Clear old arrows
   while (arrowGroup.children.length) {
     const c = arrowGroup.children.pop();
     if (c.geometry) c.geometry.dispose();
@@ -212,21 +213,26 @@ function buildArrows(pano) {
     const mesh = makeArrowMesh();
     const angle = link.atYaw;
 
-    // Position: radial distance from camera, dropped to floor level.
     mesh.position.set(
       Math.sin(angle) * ARROW_DISTANCE,
       ARROW_FLOOR_Y,
       Math.cos(angle) * ARROW_DISTANCE
     );
 
-    // Lay flat, parallel to the floor.
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.rotation.z = angle;
-
-
-    // Spin around the vertical axis so the arrow's tip points from the
-    // camera toward the destination direction (atYaw).
-    mesh.rotation.z = angle;
+    // Lay flat on the floor and aim the chevron toward the target.
+    //
+    // Order matters: YXZ means Y is applied first (spin around vertical
+    // axis in world space), then X (tilt flat), then Z (in-plane twist).
+    //
+    // The chevron is drawn pointing UP in its canvas (toward -Y of the
+    // plane). After tilt, "up in the canvas" becomes "away from camera
+    // horizontally" only if we add the +π/2 in the Z slot.
+    mesh.rotation.set(
+      -Math.PI / 2,         // X — tilt flat
+      -angle,               // Y — aim at target direction
+      Math.PI / 2,          // Z — rotate chevron to point the right way
+      "YXZ"
+    );
 
     mesh.userData.target = link.target;
     mesh.userData.isArrow = true;
@@ -247,7 +253,7 @@ function makeArrowMesh() {
   const cy = size / 2;
   const discR = size * 0.36;
 
-  // --- Soft drop shadow under the disc ---
+  // Drop shadow
   ctx.save();
   ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
   ctx.shadowBlur = 22;
@@ -258,22 +264,21 @@ function makeArrowMesh() {
   ctx.fill();
   ctx.restore();
 
-  // --- White disc ---
+  // White disc
   ctx.beginPath();
   ctx.arc(cx, cy, discR, 0, Math.PI * 2);
   ctx.fillStyle = "#ffffff";
   ctx.fill();
 
-  // --- Thin grey border ring ---
+  // Thin border
   ctx.beginPath();
   ctx.arc(cx, cy, discR, 0, Math.PI * 2);
   ctx.strokeStyle = "rgba(0, 0, 0, 0.15)";
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  // --- Solid chevron (Google blue) ---
+  // Blue chevron
   const chevColor = "#1a73e8";
-
   ctx.beginPath();
   ctx.moveTo(cx, size * 0.30);
   ctx.lineTo(cx + size * 0.19, size * 0.60);
@@ -286,7 +291,6 @@ function makeArrowMesh() {
   ctx.fillStyle = chevColor;
   ctx.fill();
 
-  // Rounded corners
   ctx.lineJoin = "round";
   ctx.lineWidth = 6;
   ctx.strokeStyle = chevColor;
@@ -315,8 +319,15 @@ function makeArrowMesh() {
 function setupPointerEvents(container) {
   const el = renderer.domElement;
 
+  // Prevent browser scrolling/zooming the page itself on touch.
+  el.style.touchAction = "none";
+
   el.addEventListener("pointerdown", (e) => {
-    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    activePointers.set(e.pointerId, {
+      x: e.clientX,
+      y: e.clientY,
+      type: e.pointerType,        // "mouse" | "pen" | "touch"
+    });
 
     if (activePointers.size === 1) {
       if (tryClickArrow(e)) {
@@ -329,6 +340,10 @@ function setupPointerEvents(container) {
       pointerStart.y = e.clientY;
       yawAtDragStart = targetYaw;
       pitchAtDragStart = targetPitch;
+
+      // Pick sensitivity based on input type
+      activeDragSensitivity =
+        e.pointerType === "touch" ? TOUCH_SENSITIVITY : DRAG_SENSITIVITY;
     } else if (activePointers.size === 2) {
       isDragging = false;
       container.classList.remove("dragging");
@@ -342,10 +357,16 @@ function setupPointerEvents(container) {
 
   el.addEventListener("pointermove", (e) => {
     if (!activePointers.has(e.pointerId)) {
-      updateHover(e);
+      // Only try hover on mouse (skip raycasting on touch — saves CPU)
+      if (e.pointerType === "mouse") updateHover(e);
       return;
     }
-    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    activePointers.set(e.pointerId, {
+      x: e.clientX,
+      y: e.clientY,
+      type: e.pointerType,
+    });
 
     if (activePointers.size === 2) {
       const pts = [...activePointers.values()];
@@ -362,9 +383,10 @@ function setupPointerEvents(container) {
     const dx = e.clientX - pointerStart.x;
     const dy = e.clientY - pointerStart.y;
 
-    targetYaw = yawAtDragStart - dx * DRAG_SENSITIVITY;
+    // Note: dx/dy are relative to drag START. Multiply by sensitivity.
+    targetYaw = yawAtDragStart - dx * activeDragSensitivity;
     targetPitch = clamp(
-      pitchAtDragStart + dy * DRAG_SENSITIVITY,
+      pitchAtDragStart + dy * activeDragSensitivity,
       -MAX_PITCH,
       MAX_PITCH
     );
@@ -377,12 +399,15 @@ function setupPointerEvents(container) {
       isDragging = false;
       container.classList.remove("dragging");
     } else if (activePointers.size === 1) {
+      // Dropped from pinch to single finger — restart drag cleanly
       const remaining = [...activePointers.values()][0];
       isDragging = true;
       pointerStart.x = remaining.x;
       pointerStart.y = remaining.y;
       yawAtDragStart = targetYaw;
       pitchAtDragStart = targetPitch;
+      activeDragSensitivity =
+        remaining.type === "touch" ? TOUCH_SENSITIVITY : DRAG_SENSITIVITY;
     }
   };
 
