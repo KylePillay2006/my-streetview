@@ -1,6 +1,7 @@
 /* ============================================================
    360° Cylindrical Panorama Viewer — Phase 2
    Flat "on the floor" navigation arrows.
+   Snappy touch controls, fixed arrow orientation.
    ============================================================ */
 
 /* ---------- Panorama graph ---------- */
@@ -35,12 +36,12 @@ const BASE_FOV = 75;
 
 const CYLINDER_HEIGHT_RATIO = 0.85;
 
-// Drag sensitivity (radians per pixel). Higher = faster turning.
-// Desktop uses this; touch uses TOUCH_SENSITIVITY below.
-const DRAG_SENSITIVITY = 0.0025;
-const TOUCH_SENSITIVITY = 0.006;   // ~2.4x faster for finger drags
+// Drag sensitivity (radians per pixel of finger/mouse movement).
+const DRAG_SENSITIVITY = 0.005;    // mouse
+const TOUCH_SENSITIVITY = 0.012;   // touch — faster for finger drags
 
-const DAMPING = 0.88;
+// Smoothing. Lower = snappier. 0.75 still smooths micro-jitter but reacts fast.
+const DAMPING = 0.75;
 
 const MIN_FOV = 30;
 const MAX_FOV = 100;
@@ -55,21 +56,25 @@ const ARROW_SIZE = 90;
 
 const FADE_DURATION = 0.35;
 
+// Detect mobile once
+const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
 /* ---------- State ---------- */
 
 let scene, camera, renderer, cylinder;
 let currentPanoId = null;
 let arrowGroup = null;
 let isDragging = false;
-let pointerStart = { x: 0, y: 0 };
 let yawAtDragStart = 0;
 let pitchAtDragStart = 0;
-let activeDragSensitivity = DRAG_SENSITIVITY;   // chosen per pointerdown
+let activeDragSensitivity = DRAG_SENSITIVITY;
 
 let targetYaw = yaw;
 let targetPitch = pitch;
 let targetFov = BASE_FOV;
 
+// Track pointers with current position; we use per-event deltas, not
+// distance from start, so sensitivity feels 1:1 with the finger.
 const activePointers = new Map();
 let pinchStartDistance = 0;
 let pinchStartFov = BASE_FOV;
@@ -97,13 +102,11 @@ function init() {
   camera.position.set(0, 0, 0);
 
   renderer = new THREE.WebGLRenderer({
-    antialias: true,
+    antialias: !IS_MOBILE,        // save GPU on phones
     powerPreference: "high-performance",
   });
 
-  // Cap pixel ratio lower on mobile so phones don't melt.
-  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  const maxPR = isMobile ? 1.5 : 2;
+  const maxPR = IS_MOBILE ? 1.5 : 2;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPR));
   renderer.setSize(window.innerWidth, window.innerHeight);
   container.appendChild(renderer.domElement);
@@ -112,7 +115,10 @@ function init() {
   const radius = 500;
   const height = radius * CYLINDER_HEIGHT_RATIO * 2;
   const geometry = new THREE.CylinderGeometry(
-    radius, radius, height, 64, 1, true
+    radius, radius, height,
+    IS_MOBILE ? 32 : 64,          // fewer segments on mobile
+    1,
+    true
   );
   geometry.scale(-1, 1, 1);
 
@@ -159,9 +165,10 @@ function switchTo(id, opts = {}) {
         texture.wrapS = THREE.RepeatWrapping;
         texture.wrapT = THREE.ClampToEdgeWrapping;
 
-        // Lower quality filtering on mobile → faster
-        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-        texture.minFilter = isMobile ? THREE.LinearFilter : THREE.LinearMipmapLinearFilter;
+        // Cheaper filtering on mobile
+        texture.minFilter = IS_MOBILE
+          ? THREE.LinearFilter
+          : THREE.LinearMipmapLinearFilter;
 
         if (cylinder.material.map) cylinder.material.map.dispose();
 
@@ -219,18 +226,15 @@ function buildArrows(pano) {
       Math.cos(angle) * ARROW_DISTANCE
     );
 
-    // Lay flat on the floor and aim the chevron toward the target.
-    //
-    // Order matters: YXZ means Y is applied first (spin around vertical
-    // axis in world space), then X (tilt flat), then Z (in-plane twist).
-    //
-    // The chevron is drawn pointing UP in its canvas (toward -Y of the
-    // plane). After tilt, "up in the canvas" becomes "away from camera
-    // horizontally" only if we add the +π/2 in the Z slot.
+    // Lay the arrow flat on the floor and aim its tip toward the target.
+    // "YXZ" order: Y (yaw to aim) is applied first in world space,
+    // then X (tilt flat), then Z (rotate chevron in its own plane).
+    // The +π/2 in Z turns the canvas's "up" chevron into a "forward" tip
+    // once the plane is lying flat.
     mesh.rotation.set(
-      -Math.PI / 2,         // X — tilt flat
-      -angle,               // Y — aim at target direction
-      Math.PI / 2,          // Z — rotate chevron to point the right way
+      -Math.PI / 2,   // X: tilt flat
+      -angle,         // Y: aim at target direction
+      Math.PI / 2,    // Z: rotate chevron to point correctly
       "YXZ"
     );
 
@@ -319,14 +323,14 @@ function makeArrowMesh() {
 function setupPointerEvents(container) {
   const el = renderer.domElement;
 
-  // Prevent browser scrolling/zooming the page itself on touch.
+  // Prevent browser-level scroll/zoom on touch
   el.style.touchAction = "none";
 
   el.addEventListener("pointerdown", (e) => {
     activePointers.set(e.pointerId, {
       x: e.clientX,
       y: e.clientY,
-      type: e.pointerType,        // "mouse" | "pen" | "touch"
+      type: e.pointerType,
     });
 
     if (activePointers.size === 1) {
@@ -336,12 +340,8 @@ function setupPointerEvents(container) {
       }
       isDragging = true;
       container.classList.add("dragging");
-      pointerStart.x = e.clientX;
-      pointerStart.y = e.clientY;
       yawAtDragStart = targetYaw;
       pitchAtDragStart = targetPitch;
-
-      // Pick sensitivity based on input type
       activeDragSensitivity =
         e.pointerType === "touch" ? TOUCH_SENSITIVITY : DRAG_SENSITIVITY;
     } else if (activePointers.size === 2) {
@@ -357,10 +357,15 @@ function setupPointerEvents(container) {
 
   el.addEventListener("pointermove", (e) => {
     if (!activePointers.has(e.pointerId)) {
-      // Only try hover on mouse (skip raycasting on touch — saves CPU)
       if (e.pointerType === "mouse") updateHover(e);
       return;
     }
+
+    // Compute delta since LAST pointermove, not since pointerdown.
+    // This gives 1:1 tracking that feels responsive at any drag speed.
+    const prev = activePointers.get(e.pointerId);
+    const dx = e.clientX - prev.x;
+    const dy = e.clientY - prev.y;
 
     activePointers.set(e.pointerId, {
       x: e.clientX,
@@ -368,6 +373,7 @@ function setupPointerEvents(container) {
       type: e.pointerType,
     });
 
+    // Two-finger pinch zoom
     if (activePointers.size === 2) {
       const pts = [...activePointers.values()];
       const dist = distance(pts[0], pts[1]);
@@ -380,13 +386,10 @@ function setupPointerEvents(container) {
 
     if (!isDragging) return;
 
-    const dx = e.clientX - pointerStart.x;
-    const dy = e.clientY - pointerStart.y;
-
-    // Note: dx/dy are relative to drag START. Multiply by sensitivity.
-    targetYaw = yawAtDragStart - dx * activeDragSensitivity;
+    // Incremental drag — apply this event's movement directly.
+    targetYaw -= dx * activeDragSensitivity;
     targetPitch = clamp(
-      pitchAtDragStart + dy * activeDragSensitivity,
+      targetPitch + dy * activeDragSensitivity,
       -MAX_PITCH,
       MAX_PITCH
     );
@@ -399,11 +402,9 @@ function setupPointerEvents(container) {
       isDragging = false;
       container.classList.remove("dragging");
     } else if (activePointers.size === 1) {
-      // Dropped from pinch to single finger — restart drag cleanly
+      // Pinch → single-finger: reset drag anchors so it doesn't jump.
       const remaining = [...activePointers.values()][0];
       isDragging = true;
-      pointerStart.x = remaining.x;
-      pointerStart.y = remaining.y;
       yawAtDragStart = targetYaw;
       pitchAtDragStart = targetPitch;
       activeDragSensitivity =
