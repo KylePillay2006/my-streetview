@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>360° Panorama Viewer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- The Three.js canvas will be injected here -->
+  <div id="viewer"></div>
+
+  <!-- Loading indicator -->
+  <div id="loader">
+    <div class="spinner"></div>
+    <p>Loading panorama…</p>
+  </div>
+
+  <!-- Fullscreen button -->
+  <button id="fullscreen-btn" title="Toggle fullscreen" aria-label="Toggle fullscreen">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+    </svg>
+  </button>
+
+  <!-- Three.js from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+
+  <!-- Our app -->
+  <script src="app.js"></script>
+</body>
+</html>

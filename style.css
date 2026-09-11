@@ -1,0 +1,101 @@
+/* ---------- Reset & base ---------- */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #fff;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ---------- Viewer container ---------- */
+#viewer {
+  position: fixed;
+  inset: 0;
+  cursor: grab;
+}
+
+#viewer.dragging {
+  cursor: grabbing;
+}
+
+#viewer canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------- Loader ---------- */
+#loader {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: #111;
+  z-index: 10;
+  transition: opacity 0.4s ease;
+}
+
+#loader.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#loader p {
+  font-size: 14px;
+  letter-spacing: 0.05em;
+  color: #bbb;
+}
+
+.spinner {
+  width: 42px;
+  height: 42px;
+  border: 3px solid rgba(255, 255, 255, 0.15);
+  border-top-color: #4da3ff;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---------- Fullscreen button ---------- */
+#fullscreen-btn {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 5;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+
+#fullscreen-btn:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+#fullscreen-btn:active {
+  transform: scale(0.94);
+}
